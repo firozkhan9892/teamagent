@@ -1,16 +1,8 @@
-import sys
-import traceback
-
-try:
-    import streamlit as st
-    import yfinance as yf
-    import pandas as pd
-    import requests
-    import os
-except Exception as e:
-    print(f"Import error: {e}")
-    traceback.print_exc()
-    sys.exit(1)
+import streamlit as st
+import yfinance as yf
+import pandas as pd
+import requests
+import os
 
 st.set_page_config(page_title="Stock Analyzer", page_icon="📈")
 
@@ -37,13 +29,7 @@ INDIAN_STOCKS = {
     "ADANIPORTS.NS": "Adani Ports"
 }
 
-def send_telegram(msg, token, chat_id):
-    try:
-        url = f"https://api.telegram.org/bot{token}/sendMessage"
-        requests.post(url, data={"chat_id": chat_id, "text": msg}, timeout=10)
-    except Exception as e:
-        print(f"Telegram error: {e}")
-
+@st.cache_data(ttl=3600, show_spinner=False)
 def get_stock(ticker):
     try:
         stock = yf.Ticker(ticker)
@@ -57,64 +43,79 @@ def get_stock(ticker):
             "pe": info.get("peRatio"),
             "ticker": ticker
         }
-    except Exception as e:
-        print(f"Stock error for {ticker}: {e}")
+    except:
         return None
+
+def send_telegram(msg, token, chat_id):
+    try:
+        url = f"https://api.telegram.org/bot{token}/sendMessage"
+        requests.post(url, data={"chat_id": chat_id, "text": msg}, timeout=5)
+    except:
+        pass
 
 st.title("📈 Stock Market Analyzer")
 
 with st.sidebar:
-    st.header("Telegram")
-    token = st.text_input("Bot Token", os.getenv("TELEGRAM_BOT_TOKEN", ""), type="password")
-    chat_id = st.text_input("Chat ID", os.getenv("CHAT_ID", ""))
+    st.header("Telegram Settings")
+    token = st.text_input("Bot Token", value=os.getenv("TELEGRAM_BOT_TOKEN", ""), type="password")
+    chat_id = st.text_input("Chat ID", value=os.getenv("CHAT_ID", ""))
     if token and chat_id:
         st.session_state.tg_token = token
         st.session_state.tg_chat = chat_id
-        if st.button("Test"):
-            send_telegram("✅ Working!", token, chat_id)
+        if st.button("Test Message"):
+            send_telegram("✅ App connected!", token, chat_id)
             st.success("Sent!")
 
+st.subheader("Stock Prices")
 results = []
-for ticker in INDIAN_STOCKS.keys():
-    r = get_stock(ticker)
-    if r:
-        results.append(r)
+with st.spinner("Loading stocks..."):
+    for ticker in INDIAN_STOCKS.keys():
+        r = get_stock(ticker)
+        if r:
+            results.append(r)
 
-st.metric("Stocks", len(results))
-st.metric("Buy Signals", sum(1 for r in results if r.get("rec") in ["buy", "strongBuy"]))
+if results:
+    col1, col2 = st.columns(2)
+    col1.metric("Stocks", len(results))
+    col2.metric("Buy Signals", sum(1 for r in results if r.get("rec") in ["buy", "strongBuy"]))
+    
+    df = pd.DataFrame(results)
+    df["price"] = df["price"].apply(lambda x: f"₹{x:.0f}" if x else "N/A")
+    df["target"] = df["target"].apply(lambda x: f"₹{x:.0f}" if x else "N/A")
+    df["pe"] = df["pe"].apply(lambda x: str(x) if x else "N/A")
+    df["mcap"] = df["mcap"].apply(lambda x: f"₹{x/1e12:.1f}T" if x else "N/A")
+    st.dataframe(df[["name", "price", "target", "rec", "pe", "mcap"]], use_container_width=True)
+    
+    buys = [s for s in results if s.get("rec") in ["buy", "strongBuy"]]
+    if buys:
+        st.subheader("Buy Recommendations")
+        for s in buys:
+            col = st.container()
+            with col:
+                c1, c2 = st.columns([4, 1])
+                with c1:
+                    st.success(f"📈 {s['name']} - {s['rec'].upper()}")
+                with c2:
+                    if st.button("Alert", key=s["ticker"]):
+                        if "tg_token" in st.session_state:
+                            send_telegram(f"BUY: {s['name']} @ ₹{s['price']}", st.session_state.tg_token, st.session_state.tg_chat)
+                            st.rerun()
+else:
+    st.warning("Could not load stock data. Please try again later.")
 
-df = pd.DataFrame(results)
-df["price"] = df["price"].apply(lambda x: f"₹{x:.0f}" if x else "N/A")
-df["target"] = df["target"].apply(lambda x: f"₹{x:.0f}" if x else "N/A")
-df["pe"] = df["pe"].apply(lambda x: f"{x}" if x else "N/A")
-df["mcap"] = df["mcap"].apply(lambda x: f"₹{x/1e12:.1f}T" if x else "N/A")
-
-st.dataframe(df[["name", "price", "target", "rec", "pe", "mcap"]], use_container_width=True)
-
-st.divider()
-st.subheader("Buy Recommendations")
-for s in results:
-    if s.get("rec") in ["buy", "strongBuy"]:
-        if st.button(f"📤 {s['name']}", key=s["ticker"]):
-            if "tg_token" in st.session_state:
-                send_telegram(f"BUY: {s['name']}", st.session_state.tg_token, st.session_state.tg_chat)
-                st.success("Sent!")
-
-st.divider()
-st.subheader("📰 News")
-name = st.selectbox("Stock", [v for v in INDIAN_STOCKS.values()])
+st.subheader("📰 Latest News")
+name = st.selectbox("Select Stock", [v for v in INDIAN_STOCKS.values()])
 try:
     import xml.etree.ElementTree as ET
-    url = f"https://news.google.com/rss/search?q={name}+stock+BSE&hl=en-IN&gl=IN&ceid=IN/en"
+    url = f"https://news.google.com/rss/search?q={name}+stock+NSE&hl=en-IN&gl=IN&ceid=IN/en"
     r = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=5)
     if r.ok:
         root = ET.fromstring(r.content)
-        for item in root.findall('.//item')[:5]:
+        for item in list(root.findall('.//item'))[:5]:
             t = item.find('title')
             l = item.find('link')
-            if t and l:
+            if t is not None and l is not None:
                 st.markdown(f"**{t.text}**")
                 st.markdown(f"[Read →]({l.text})")
-except Exception as e:
-    print(f"News error: {e}")
-    st.info("No news")
+except:
+    st.info("No news available")
