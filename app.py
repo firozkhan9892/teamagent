@@ -1,8 +1,16 @@
-import streamlit as st
-import yfinance as yf
-import pandas as pd
-import requests
-import os
+import sys
+import traceback
+
+try:
+    import streamlit as st
+    import yfinance as yf
+    import pandas as pd
+    import requests
+    import os
+except Exception as e:
+    print(f"Import error: {e}")
+    traceback.print_exc()
+    sys.exit(1)
 
 st.set_page_config(page_title="Stock Analyzer", page_icon="📈")
 
@@ -33,8 +41,8 @@ def send_telegram(msg, token, chat_id):
     try:
         url = f"https://api.telegram.org/bot{token}/sendMessage"
         requests.post(url, data={"chat_id": chat_id, "text": msg}, timeout=10)
-    except:
-        pass
+    except Exception as e:
+        print(f"Telegram error: {e}")
 
 def get_stock(ticker):
     try:
@@ -49,7 +57,8 @@ def get_stock(ticker):
             "pe": info.get("peRatio"),
             "ticker": ticker
         }
-    except:
+    except Exception as e:
+        print(f"Stock error for {ticker}: {e}")
         return None
 
 st.title("📈 Stock Market Analyzer")
@@ -65,7 +74,11 @@ with st.sidebar:
             send_telegram("✅ Working!", token, chat_id)
             st.success("Sent!")
 
-results = [r for r in [get_stock(t) for t in INDIAN_STOCKS.keys()] if r]
+results = []
+for ticker in INDIAN_STOCKS.keys():
+    r = get_stock(ticker)
+    if r:
+        results.append(r)
 
 st.metric("Stocks", len(results))
 st.metric("Buy Signals", sum(1 for r in results if r.get("rec") in ["buy", "strongBuy"]))
@@ -102,5 +115,6 @@ try:
             if t and l:
                 st.markdown(f"**{t.text}**")
                 st.markdown(f"[Read →]({l.text})")
-except:
+except Exception as e:
+    print(f"News error: {e}")
     st.info("No news")
